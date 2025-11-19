@@ -280,7 +280,12 @@ class GameCoordinator:
                 logger.info(f"Game finished! Winner: {winner}")
                 logger.info(f"Final Scores - Circle: {final_scores['circle']:.2f}, Square: {final_scores['square']:.2f}")
             else:
-                # Check for turn limit (same as gameEngine.py)
+                # Switch to next player and increment turn count
+                game["current_player"] = "square" if player == "circle" else "circle"
+                game["turn_count"] += 1
+                game["last_move_time"] = time.time()
+                
+                # Check for turn limit AFTER incrementing (1000 total turns = 500 per player)
                 if game["turn_count"] >= 1000:
                     game["winner"] = None
                     game["game_status"] = "finished"
@@ -293,13 +298,8 @@ class GameCoordinator:
                         }
                     )
                     game["final_scores"] = final_scores
-                    logger.info("Turn limit (1000) reached. Game ends in a draw.")
+                    logger.info("Turn limit (1000 total turns) reached. Game ends in a draw.")
                     logger.info(f"Final Scores - Circle: {final_scores['circle']:.2f}, Square: {final_scores['square']:.2f}")
-                else:
-                    # Switch to next player
-                    game["current_player"] = "square" if player == "circle" else "circle"
-                    game["turn_count"] += 1
-                    game["last_move_time"] = time.time()
             
             # Broadcast update to web clients
             self._broadcast_game_update(game)
