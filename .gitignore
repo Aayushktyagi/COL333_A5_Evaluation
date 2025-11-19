@@ -1,0 +1,30 @@
+# Log files
+*.log
+debug_log.txt
+evaluation_*.log
+nohup.out
+
+# Temporary test directories
+temp_tests/
+__pycache__/
+*.pyc
+*.pyo
+
+# Results that change frequently (optional - uncomment if you don't want to track)
+# results/submissions_list.csv
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Python virtual environments
+venv/
+env/
+ENV/

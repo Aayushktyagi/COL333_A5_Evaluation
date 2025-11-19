@@ -13,18 +13,22 @@ from multiprocessing import Pool
 from pathlib import Path
 
 # Configuration
-SUBMISSIONS_CSV = "/Users/aayushtyagi/Aayush/PhD/Learning/COL333_TA_25A/A5/evaluation/results/submissions_list.csv"
-EVALUATION_DIR = "/Users/aayushtyagi/Aayush/PhD/Learning/COL333_TA_25A/A5/evaluation"
-REFERENCE_DIR = "/Users/aayushtyagi/Aayush/PhD/Learning/COL333_TA_25A/A5/A5_final/COL333_2025_A5/client_server"
-SUBMISSIONS_BASE = "/Users/aayushtyagi/Aayush/PhD/Learning/COL333_TA_25A/A5/assignment_7153640_export"
+SUBMISSIONS_CSV = "/home/aayush/Aayush/Learning/Courses/COL333_TA/A5/COL333_A5_Evaluation/results/submissions_list.csv"
+EVALUATION_DIR = "/home/aayush/Aayush/Learning/Courses/COL333_TA/A5/COL333_A5_Evaluation"
+REFERENCE_DIR = "/home/aayush/Aayush/Learning/Courses/COL333_TA/A5/COL333_2025_A5/client_server"
+SUBMISSIONS_BASE = "/home/aayush/Aayush/Learning/Courses/COL333_TA/A5/assignment_7153640_export"
+REFERENCE_STUDENT_AGENT = "/home/aayush/Aayush/Learning/Courses/COL333_TA/A5/COL333_A5_Evaluation/temp_tests/submission_369109993_p9500"  # Student agent to test against
 
 # Parallel configuration
-NUM_PARALLEL_SERVERS = 8  # Number of parallel servers to run
+NUM_PARALLEL_SERVERS = 20  # Number of parallel servers to run
 BASE_PORT = 9500  # Starting port number
 TIMEOUT_PER_GAME = 300  # 5 minutes per game
 
 # Board sizes to test
 BOARD_SIZES = ['small', 'medium', 'large']
+
+# Python executable (use conda environment)
+PYTHON_EXE = "/home/aayush/anaconda3/envs/Aayush_env/bin/python"
 
 def test_submission(args):
     """Test a single submission against random agent."""
@@ -42,10 +46,15 @@ def test_submission(args):
         os.makedirs(test_dir, exist_ok=True)
         
         # Copy reference files
-        for file in ['gameEngine.py', 'agent.py', 'web_server.py', 'bot_client.py']:
+        for file in ['gameEngine.py', 'agent.py', 'bot_client.py']:
             src = os.path.join(REFERENCE_DIR, file)
             dst = os.path.join(test_dir, file)
             subprocess.run(['cp', src, dst], check=True, capture_output=True)
+        
+        # Copy updated web_server.py with repetition detection from manual_test
+        web_server_src = os.path.join(EVALUATION_DIR, 'manual_test', 'web_server.py')
+        web_server_dst = os.path.join(test_dir, 'web_server.py')
+        subprocess.run(['cp', web_server_src, web_server_dst], check=True, capture_output=True)
         
         # Copy templates directory
         templates_src = os.path.join(REFERENCE_DIR, 'templates')
@@ -54,10 +63,11 @@ def test_submission(args):
             subprocess.run(['rm', '-rf', templates_dst], check=True, capture_output=True)
         subprocess.run(['cp', '-r', templates_src, templates_dst], check=True, capture_output=True)
         
-        # Copy student agent
+        # Copy all files from submission directory
         submission_dir = os.path.join(SUBMISSIONS_BASE, folder_name)
         
         if sub_type == 'python':
+            # Check if student_agent.py exists
             student_agent_src = os.path.join(submission_dir, 'student_agent.py')
             if not os.path.exists(student_agent_src):
                 return {
@@ -70,7 +80,16 @@ def test_submission(args):
                     'random_score': '',
                     'turns': ''
                 }
-            subprocess.run(['cp', student_agent_src, test_dir], check=True, capture_output=True)
+            
+            # Copy all Python files and supporting files from submission directory
+            # This ensures any helper modules or dependencies are available
+            for item in os.listdir(submission_dir):
+                item_path = os.path.join(submission_dir, item)
+                # Skip report files and directories
+                if item.startswith('report') or os.path.isdir(item_path):
+                    continue
+                # Copy the file
+                subprocess.run(['cp', item_path, test_dir], check=True, capture_output=True)
         else:
             # Skip C++ submissions for now
             return {
@@ -91,7 +110,7 @@ def test_submission(args):
         server_log = os.path.join(test_dir, 'server.log')
         with open(server_log, 'w') as log_file:
             server_proc = subprocess.Popen(
-                ['python3', 'web_server.py', str(port), board_size],
+                [PYTHON_EXE, 'web_server.py', str(port), board_size],
                 cwd=test_dir,
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
@@ -99,7 +118,7 @@ def test_submission(args):
             )
         
         # Wait for server to start
-        time.sleep(5)
+        time.sleep(15)
         
         # Check if server is running
         if server_proc.poll() is not None:
@@ -120,21 +139,21 @@ def test_submission(args):
         student_log = os.path.join(test_dir, 'student_bot.log')
         with open(student_log, 'w') as log_file:
             student_proc = subprocess.Popen(
-                ['python3', os.path.join(EVALUATION_DIR, 'test_bot_student.py'), 
+                [PYTHON_EXE, os.path.join(EVALUATION_DIR, 'test_bot_student.py'), 
                  test_dir, str(port), board_size],
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 preexec_fn=os.setsid
             )
         
-        time.sleep(2)
+        time.sleep(3)
         
-        # Start random bot
+        # Start reference student bot (instead of random)
         random_log = os.path.join(test_dir, 'random_bot.log')
         with open(random_log, 'w') as log_file:
             random_proc = subprocess.Popen(
-                ['python3', os.path.join(EVALUATION_DIR, 'test_bot_random.py'), 
-                 test_dir, str(port), board_size],
+                [PYTHON_EXE, os.path.join(EVALUATION_DIR, 'test_bot_vs_student.py'), 
+                 test_dir, str(port), board_size, REFERENCE_STUDENT_AGENT],
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 preexec_fn=os.setsid
@@ -145,8 +164,10 @@ def test_submission(args):
         game_completed = False
         
         while time.time() - start_time < TIMEOUT_PER_GAME:
-            if server_proc.poll() is not None:
+            # Check if both bots have finished (game complete)
+            if student_proc.poll() is not None and random_proc.poll() is not None:
                 game_completed = True
+                print(f"[Port {port}] Game completed for {folder_name}")
                 break
             time.sleep(2)
         

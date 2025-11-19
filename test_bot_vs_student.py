@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Student bot for testing."""
+"""Bot that uses a reference student agent instead of random."""
 import sys
 import requests
 import time
@@ -9,19 +9,22 @@ import os
 os.environ['NO_PROXY'] = 'localhost,127.0.0.1'
 
 def main():
-    if len(sys.argv) != 4:
-        print(f"Usage: {sys.argv[0]} <submission_dir> <port> <board_size>")
+    if len(sys.argv) != 5:
+        print(f"Usage: {sys.argv[0]} <submission_dir> <port> <board_size> <reference_agent_dir>")
         sys.exit(1)
     
     submission_dir = sys.argv[1]
     port = int(sys.argv[2])
     board_size = sys.argv[3]
+    reference_agent_dir = sys.argv[4]
     
-    # Add submission directory to path
+    # Add submission directory first for gameEngine
     sys.path.insert(0, submission_dir)
-    
-    from student_agent import StudentAgent
     from gameEngine import Piece
+    
+    # Add reference agent directory to import StudentAgent
+    sys.path.insert(0, reference_agent_dir)
+    from student_agent import StudentAgent
     
     def convert_board_to_pieces(board):
         """Convert dict-based board to Piece-based board."""
@@ -44,7 +47,7 @@ def main():
             new_board.append(new_row)
         return new_board
     
-    PLAYER = "circle"
+    PLAYER = "square"
     HOST = "10.237.23.218"  # Use actual IP instead of localhost
     
     # Connect bot (retry if server not ready)
@@ -53,7 +56,7 @@ def main():
         try:
             resp = requests.post(
                 f"http://{HOST}:{port}/bot/connect/{PLAYER}",
-                json={"name": "Student", "board_size": board_size},
+                json={"name": "ReferenceStudent", "board_size": board_size},
                 timeout=10
             )
             if resp.status_code == 200:
@@ -70,7 +73,7 @@ def main():
         sys.exit(1)
     
     agent = StudentAgent(PLAYER)
-    print(f"Student agent created")
+    print(f"Reference student agent created")
     print(f"Entering game loop...")
     
     try:
@@ -110,7 +113,7 @@ def main():
                     continue
                 
                 turn += 1
-                print(f"\nTurn {turn}: My turn")
+                print(f"\nTurn {turn}: Reference student turn")
                 
                 # Choose move
                 start_time = time.time()
@@ -132,15 +135,12 @@ def main():
                     print("No move available")
                     break
                 
-                print(f"Move: {move} (thinking: {thinking_time:.3f}s)")
-                
                 # Submit move
                 resp = requests.post(
                     f"http://{HOST}:{port}/bot/move/{PLAYER}",
                     json={"move": move, "thinking_time": thinking_time}
                 )
                 result = resp.json()
-                print(f"Result: {result}")
                 
                 if not result.get("success"):
                     print(f"Move failed: {result}")
@@ -166,7 +166,7 @@ def main():
         import traceback
         traceback.print_exc()
     
-    print("\n✅ Bot finished")
+    print("\n✅ Reference student bot finished")
 
 if __name__ == "__main__":
     main()

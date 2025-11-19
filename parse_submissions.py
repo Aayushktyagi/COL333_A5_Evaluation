@@ -13,8 +13,8 @@ import csv
 import re
 from pathlib import Path
 
-SUBMISSIONS_BASE = "/Users/aayushtyagi/Aayush/PhD/Learning/COL333_TA_25A/A5/assignment_7153640_export"
-OUTPUT_CSV = "/Users/aayushtyagi/Aayush/PhD/Learning/COL333_TA_25A/A5/evaluation/results/submissions_list.csv"
+SUBMISSIONS_BASE = "/home/aayush/Aayush/Learning/Courses/COL333_TA/A5/assignment_7153640_export"
+OUTPUT_CSV = "/home/aayush/Aayush/Learning/Courses/COL333_TA/A5/COL333_A5_Evaluation/results/submissions_list.csv"
 
 def find_report_file(folder_path):
     """Find any report file (txt or pdf) in submission folder (including subdirs)."""
