@@ -216,7 +216,18 @@ class GameCoordinator:
             winner = "square" if player == "circle" else "circle"
             game["winner"] = winner
             game["game_status"] = "finished"
-            result = {"success": True, "timeout": True, "winner": winner}
+            # Calculate final scores
+            final_scores = compute_final_scores(
+                game["board"], winner, game["rows"], game["cols"], game["score_cols"],
+                remaining_times={
+                    "circle": game["players"]["circle"]["time_left"],
+                    "square": game["players"]["square"]["time_left"]
+                }
+            )
+            game["final_scores"] = final_scores
+            logger.info(f"⏱️  TIMEOUT - {player} ran out of time. Winner: {winner}")
+            logger.info(f"Final Scores - Circle: {final_scores['circle']:.2f}, Square: {final_scores['square']:.2f}")
+            result = {"success": True, "timeout": True, "winner": winner, "circle_score": final_scores['circle'], "square_score": final_scores['square']}
             self._broadcast_game_update(game)
             return result
         
@@ -256,11 +267,11 @@ class GameCoordinator:
                             }
                         )
                         game["final_scores"] = final_scores
-                        logger.info(f"Repetition/stalemate detected: Board repeated 3 times consecutively. {player} loses.")
+                        logger.info(f"🔁 REPETITION DETECTED: Board repeated 3 times consecutively. {player} loses.")
                         logger.info(f"Winner: {winner}")
                         logger.info(f"Final Scores - Circle: {final_scores['circle']:.2f}, Square: {final_scores['square']:.2f}")
                         self._broadcast_game_update(game)
-                        return {"success": True, "message": "Repetition detected - opponent wins", "winner": winner}
+                        return {"success": True, "message": "Repetition detected - opponent wins", "winner": winner, "circle_score": final_scores['circle'], "square_score": final_scores['square']}
             
             # Check for win condition
             winner = check_win(game["board"], game["rows"], game["cols"], game["score_cols"])
@@ -304,7 +315,11 @@ class GameCoordinator:
             # Broadcast update to web clients
             self._broadcast_game_update(game)
             
-            return {"success": True, "message": message, "winner": winner}
+            result = {"success": True, "message": message, "winner": winner}
+            if "final_scores" in game:
+                result["circle_score"] = game["final_scores"]["circle"]
+                result["square_score"] = game["final_scores"]["square"]
+            return result
         else:
             # Invalid move: opponent wins immediately
             winner = "square" if player == "circle" else "circle"
@@ -319,7 +334,7 @@ class GameCoordinator:
                 }
             )
             game["final_scores"] = final_scores
-            logger.info(f"Invalid move by {player}: {message}. Winner: {winner}")
+            logger.info(f"❌ INVALID MOVE by {player}: {message}. Winner: {winner}")
             logger.info(f"Final Scores - Circle: {final_scores['circle']:.2f}, Square: {final_scores['square']:.2f}")
             
             # Broadcast update to web clients
