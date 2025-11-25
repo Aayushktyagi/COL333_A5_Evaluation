@@ -19,18 +19,32 @@ from itertools import combinations
 
 # Configuration
 PORT = 9500
-BOARD_SIZES = ['small', 'medium', 'large']
-# Time limits for thinking time (server internal timeout)
+
+# TOURNAMENT CONFIGURATION
+# Tournament 1 (T1): Only small board, each match played twice (role swap)
+TOURNAMENT_MODE = "T1"  # T1 = small board only, T2/T3 = all boards
+
+if TOURNAMENT_MODE == "T1":
+    BOARD_SIZES = ['small']  # Only small board for first tournament
+else:
+    BOARD_SIZES = ['small', 'medium', 'large']
+
+# Time limits per player (as per assignment requirements)
+# Server enforces these limits internally
 SERVER_TIME_LIMITS = {
-    'small': 120,   # 2 minutes
-    'medium': 240,  # 4 minutes
-    'large': 360    # 6 minutes
+    'small': 120,   # 2 minutes per player
+    'medium': 240,  # 4 minutes per player
+    'large': 360    # 6 minutes per player
 }
-# External timeout = server timeout + buffer for connection and cleanup
+
+# External watchdog timeout = generous limit to allow games to complete
+# The server internally enforces thinking time limits per player
+# This external timeout is only to catch hung/crashed games
+# Allow for: connection time + max thinking time per player + game duration + cleanup
 TIME_LIMITS = {
-    'small': 150,   # 2.5 minutes (120s + 30s buffer)
-    'medium': 270,  # 4.5 minutes (240s + 30s buffer)
-    'large': 390    # 6.5 minutes (360s + 30s buffer)
+    'small': 300,    # 10 minutes (enough for 120s per player + turn limit gameplay)
+    'medium': 600,   # 15 minutes (enough for 240s per player + turn limit gameplay)
+    'large': 900    # 20 minutes (enough for 360s per player + turn limit gameplay)
 }
 
 class TournamentRunner:
@@ -96,13 +110,14 @@ class TournamentRunner:
             pybind11_dir = pybind11_result.stdout.strip()
             
             # Configure CMake with pybind11
+            # Use GCC-10 for better C++20 support
             result = subprocess.run(
                 [
                     'cmake', '..',
                     f'-Dpybind11_DIR={pybind11_dir}',
                     '-DCMAKE_BUILD_TYPE=Release',
-                    '-DCMAKE_C_COMPILER=gcc',
-                    '-DCMAKE_CXX_COMPILER=g++'
+                    '-DCMAKE_C_COMPILER=gcc-10',
+                    '-DCMAKE_CXX_COMPILER=g++-10'
                 ],
                 cwd=build_dir,
                 capture_output=True,
@@ -125,6 +140,9 @@ class TournamentRunner:
             
             if result.returncode != 0:
                 error_msg = result.stderr[-500:] if result.stderr else "CMake build failed"
+                # Check for C++ standard issues
+                if 'CMAKE_CXX_STANDARD' in result.stderr or 'constexpr' in result.stderr or 'C++20' in result.stderr or 'C++17' in result.stderr:
+                    return False, f"C++ compilation failed (possible C++ standard incompatibility with GCC 9): {error_msg}"
                 return False, f"CMake build failed: {error_msg}"
             
             # Check if .so file was created
@@ -229,16 +247,20 @@ class TournamentRunner:
             with open(log_path, 'r') as f:
                 content = f.read()
             
-            # Check for timeout
+            # Check for timeout - but don't report as error if game completed with valid winner
             if 'Timeout' in content or 'timeout' in content or 'TIMEOUT' in content:
-                termination_reason = "Timeout"
                 # Try to extract scores even on timeout
                 score_match = re.search(r'Final Scores - Circle:\s*(\d+\.?\d*),\s*Square:\s*(\d+\.?\d*)', content, re.IGNORECASE)
                 if score_match:
                     circle_score = float(score_match.group(1))
                     square_score = float(score_match.group(2))
                     winner = 'circle' if circle_score > square_score else 'square' if square_score > circle_score else 'draw'
+                    # Don't set termination_reason - timeout is normal, winner was determined
+                    termination_reason = None
                     break
+                else:
+                    # Timeout but no scores found - this is an actual error
+                    termination_reason = "Timeout (no scores)"
             
             # Check for repetition (3-move repetition detected)
             if 'REPETITION DETECTED' in content or 'repetition' in content.lower():
@@ -383,17 +405,34 @@ class TournamentRunner:
         return winner, circle_score, square_score, final_error
     
     def run_game(self, match_dir, player1_temp, player2_temp, board_size, log_prefix):
-        """Run a single game
+        """Run a single game on specified board size
         
-        Note: C++ submissions are expected to be pre-compiled by students.
-        The test scripts will import from student_agent_cpp.py which loads the compiled .so file.
+        Args:
+            match_dir: Directory where match files are located
+            player1_temp: Directory for player1 (will play as Circle)
+            player2_temp: Directory for player2 (will play as Square)
+            board_size: 'small', 'medium', or 'large'
+            log_prefix: Prefix for log files
+        
+        Note: 
+        - Web server runs in headless mode (no GUI) - only API endpoints are used
+        - Server enforces time limits (2/4/6 minutes per player for small/medium/large)
+        - Latency compensation is built into web_server.py via thinking_time parameter
+        - On timeout, server automatically declares opponent as winner and computes final scores
         """
-        print(f"      🎮 Running {board_size} board game...")
+        print(f"      🎮 Running {board_size} board game (log_prefix={log_prefix})...")
+        print(f"         Board size: {board_size}")
+        print(f"         Time limit per player: {SERVER_TIME_LIMITS[board_size]}s")
+        print(f"         External watchdog: {TIME_LIMITS[board_size]}s")
+        print(f"         Match dir: {match_dir}")
+        print(f"         Player1 (Circle): {player1_temp.name}")
+        print(f"         Player2 (Square): {player2_temp.name}")
         
         # Commands using conda environment with unbuffered output (-u flag)
         conda_python = 'bash -c "source ~/anaconda3/etc/profile.d/conda.sh && conda activate Aayush_env && python -u'
         
-        # Start web server
+        # Start web server in headless mode (no GUI, only API)
+        # Pass board size explicitly to ensure correct configuration
         server_log = match_dir / f'{log_prefix}_server.log'
         with open(server_log, 'w') as f:
             server_proc = subprocess.Popen(
@@ -401,7 +440,8 @@ class TournamentRunner:
                 cwd=match_dir,
                 stdout=f,
                 stderr=subprocess.STDOUT,
-                shell=True
+                shell=True,
+                env={**os.environ, 'DISPLAY': ''}  # Disable display for headless mode
             )
         
         time.sleep(2)  # Wait for server to start
@@ -460,7 +500,8 @@ class TournamentRunner:
         
         while time.time() - start_time < timeout_seconds:
             if server_proc.poll() is not None:
-                print(f"         ✅ Server process completed naturally")
+                print(f"         ✅ Server process completed naturally, waiting 2s for logs to flush...")
+                time.sleep(2)  # Brief wait to ensure logs are fully written
                 break
             time.sleep(2)
         else:
@@ -534,50 +575,120 @@ class TournamentRunner:
         with open(summary_file, 'w') as f:
             f.write("=" * 80 + "\n")
             f.write(f"MATCH SUMMARY - Match {results['match_num']}\n")
+            if TOURNAMENT_MODE == "T1":
+                f.write(f"Tournament Mode: T1 (Small board only, role swap)\n")
             f.write("=" * 80 + "\n\n")
             
-            f.write(f"Player 1 (Circle): {results['player1']} (ID: {results['player1_id']})\n")
-            f.write(f"Player 2 (Square): {results['player2']} (ID: {results['player2_id']})\n")
+            f.write(f"Player 1: {results['player1']} (ID: {results['player1_id']})\n")
+            f.write(f"Player 2: {results['player2']} (ID: {results['player2_id']})\n")
             f.write(f"Timestamp: {results.get('timestamp', 'N/A')}\n\n")
-            
-            # Summary table
-            f.write("-" * 80 + "\n")
-            f.write(f"{'Board Size':<15} {'Winner':<15} {'Circle Score':<15} {'Square Score':<15} {'Status':<20}\n")
-            f.write("-" * 80 + "\n")
             
             total_p1_wins = 0
             total_p2_wins = 0
             total_draws = 0
             total_errors = 0
             
-            for board_size in BOARD_SIZES:
-                winner = results.get(f'{board_size}_winner', 'error')
-                p1_score = results.get(f'{board_size}_player1_score', '')
-                p2_score = results.get(f'{board_size}_player2_score', '')
-                error_msg = results.get(f'{board_size}_error', '')
+            if TOURNAMENT_MODE == "T1":
+                # T1 Mode: Show both games with role swap
+                f.write("-" * 100 + "\n")
+                f.write(f"{'Board':<10} {'Game':<8} {'P1 Role':<10} {'P2 Role':<10} {'Winner':<12} {'P1 Score':<12} {'P2 Score':<12} {'Status':<20}\n")
+                f.write("-" * 100 + "\n")
                 
-                # Count results
-                if winner == 'circle':
-                    total_p1_wins += 1
-                elif winner == 'square':
-                    total_p2_wins += 1
-                elif winner == 'draw':
-                    total_draws += 1
-                else:
-                    total_errors += 1
+                for board_size in BOARD_SIZES:
+                    # Game 1: P1=Circle, P2=Square
+                    winner_g1 = results.get(f'{board_size}_game1_winner', 'error')
+                    p1_score_g1 = results.get(f'{board_size}_game1_player1_score', '')
+                    p2_score_g1 = results.get(f'{board_size}_game1_player2_score', '')
+                    error_g1 = results.get(f'{board_size}_game1_error', '')
+                    
+                    # Game 2: P1=Square, P2=Circle
+                    winner_g2 = results.get(f'{board_size}_game2_winner', 'error')
+                    p1_score_g2 = results.get(f'{board_size}_game2_player1_score', '')
+                    p2_score_g2 = results.get(f'{board_size}_game2_player2_score', '')
+                    error_g2 = results.get(f'{board_size}_game2_error', '')
+                    
+                    # Overall
+                    overall_winner = results.get(f'{board_size}_overall_winner', 'N/A')
+                    p1_total = results.get(f'{board_size}_player1_total_score', '')
+                    p2_total = results.get(f'{board_size}_player2_total_score', '')
+                    
+                    # Count wins
+                    if winner_g1 == 'circle':  # P1 wins game 1
+                        total_p1_wins += 1
+                    elif winner_g1 == 'square':  # P2 wins game 1
+                        total_p2_wins += 1
+                    elif winner_g1 == 'draw':
+                        total_draws += 1
+                    else:
+                        total_errors += 1
+                    
+                    if winner_g2 == 'square':  # P1 wins game 2
+                        total_p1_wins += 1
+                    elif winner_g2 == 'circle':  # P2 wins game 2
+                        total_p2_wins += 1
+                    elif winner_g2 == 'draw':
+                        total_draws += 1
+                    else:
+                        total_errors += 1
+                    
+                    # Format scores
+                    p1_score_g1_str = f"{p1_score_g1:.1f}" if p1_score_g1 != '' else 'N/A'
+                    p2_score_g1_str = f"{p2_score_g1:.1f}" if p2_score_g1 != '' else 'N/A'
+                    p1_score_g2_str = f"{p1_score_g2:.1f}" if p1_score_g2 != '' else 'N/A'
+                    p2_score_g2_str = f"{p2_score_g2:.1f}" if p2_score_g2 != '' else 'N/A'
+                    p1_total_str = f"{p1_total:.1f}" if p1_total != '' else 'N/A'
+                    p2_total_str = f"{p2_total:.1f}" if p2_total != '' else 'N/A'
+                    
+                    # Status
+                    status_g1 = error_g1 if error_g1 else 'OK'
+                    status_g2 = error_g2 if error_g2 else 'OK'
+                    if len(status_g1) > 18:
+                        status_g1 = status_g1[:15] + "..."
+                    if len(status_g2) > 18:
+                        status_g2 = status_g2[:15] + "..."
+                    
+                    # Print Game 1
+                    f.write(f"{board_size.capitalize():<10} {'Game 1':<8} {'Circle':<10} {'Square':<10} {winner_g1.capitalize():<12} {p1_score_g1_str:<12} {p2_score_g1_str:<12} {status_g1:<20}\n")
+                    # Print Game 2
+                    f.write(f"{'':<10} {'Game 2':<8} {'Square':<10} {'Circle':<10} {winner_g2.capitalize():<12} {p1_score_g2_str:<12} {p2_score_g2_str:<12} {status_g2:<20}\n")
+                    # Print Overall
+                    f.write(f"{'':<10} {'Overall':<8} {'':<10} {'':<10} {overall_winner.upper():<12} {p1_total_str:<12} {p2_total_str:<12} {'':<20}\n")
+                    f.write("-" * 100 + "\n")
                 
-                # Format scores
-                score_str_circle = f"{p1_score:.1f}" if p1_score != '' else 'N/A'
-                score_str_square = f"{p2_score:.1f}" if p2_score != '' else 'N/A'
+            else:
+                # Standard Mode: Single game per board
+                f.write("-" * 80 + "\n")
+                f.write(f"{'Board Size':<15} {'Winner':<15} {'Circle Score':<15} {'Square Score':<15} {'Status':<20}\n")
+                f.write("-" * 80 + "\n")
                 
-                # Status message (truncate if too long)
-                status = error_msg if error_msg else 'Completed'
-                if len(status) > 35:
-                    status = status[:32] + "..."
+                for board_size in BOARD_SIZES:
+                    winner = results.get(f'{board_size}_winner', 'error')
+                    p1_score = results.get(f'{board_size}_player1_score', '')
+                    p2_score = results.get(f'{board_size}_player2_score', '')
+                    error_msg = results.get(f'{board_size}_error', '')
+                    
+                    # Count results
+                    if winner == 'circle':
+                        total_p1_wins += 1
+                    elif winner == 'square':
+                        total_p2_wins += 1
+                    elif winner == 'draw':
+                        total_draws += 1
+                    else:
+                        total_errors += 1
+                    
+                    # Format scores
+                    score_str_circle = f"{p1_score:.1f}" if p1_score != '' else 'N/A'
+                    score_str_square = f"{p2_score:.1f}" if p2_score != '' else 'N/A'
+                    
+                    # Status message (truncate if too long)
+                    status = error_msg if error_msg else 'Completed'
+                    if len(status) > 35:
+                        status = status[:32] + "..."
+                    
+                    f.write(f"{board_size.capitalize():<15} {winner.capitalize():<15} {score_str_circle:<15} {score_str_square:<15} {status:<20}\n")
                 
-                f.write(f"{board_size.capitalize():<15} {winner.capitalize():<15} {score_str_circle:<15} {score_str_square:<15} {status:<20}\n")
-            
-            f.write("-" * 80 + "\n\n")
+                f.write("-" * 80 + "\n\n")
             
             # Overall match result
             f.write("MATCH RESULT:\n")
@@ -623,12 +734,24 @@ class TournamentRunner:
         print(f"      📄 Match summary saved to: {summary_file.name}")
     
     def run_match(self, player1_dir, player2_dir, match_num):
-        """Run a complete match (all board sizes) between two players"""
+        """Run a complete match between two players
+        
+        For Tournament T1:
+        - Play only on small board
+        - Each match consists of 2 games:
+          * Game 1: player1 as circle (first move), player2 as square
+          * Game 2: player1 as square, player2 as circle (first move)
+        - This ensures fairness by giving both players chance to make first move
+        
+        For other tournaments:
+        - Play on all board sizes (small, medium, large)
+        - Each board size played once
+        """
         player1_id = player1_dir.name.replace('submission_', '')
         player2_id = player2_dir.name.replace('submission_', '')
         match_name = f"match_{match_num}_{player1_id}_vs_{player2_id}"
         
-        print(f"\n🎯 Match {match_num}: {player1_dir.name} (Circle) vs {player2_dir.name} (Square)")
+        print(f"\n🎯 Match {match_num}: {player1_dir.name} vs {player2_dir.name}")
         
         # Create match directory
         match_dir = self.matches_dir / match_name
@@ -644,17 +767,109 @@ class TournamentRunner:
         
         # Run games for each board size
         for board_size in BOARD_SIZES:
-            log_prefix = board_size
-            winner, circle_score, square_score, error = self.run_game(
-                match_dir, player1_temp, player2_temp, board_size, log_prefix
-            )
+            if TOURNAMENT_MODE == "T1":
+                # Tournament T1: Play twice with role swap
+                print(f"\n   📋 {board_size.upper()} BOARD - Playing 2 games with role swap")
+                
+                try:
+                    # Game 1: player1 as circle (first move), player2 as square
+                    print(f"      🎮 Game 1: {player1_dir.name} (Circle - first move) vs {player2_dir.name} (Square)")
+                    log_prefix = f'{board_size}_game1'
+                    winner_g1, circle_score_g1, square_score_g1, error_g1 = self.run_game(
+                        match_dir, player1_temp, player2_temp, board_size, log_prefix
+                    )
+                    print(f"      ✓ Game 1 completed: winner={winner_g1}, scores={circle_score_g1}-{square_score_g1}")
+                except Exception as e:
+                    print(f"      ❌ Game 1 crashed with exception: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+                    winner_g1 = 'error'
+                    circle_score_g1 = None
+                    square_score_g1 = None
+                    error_g1 = f"Exception: {str(e)[:200]}"
+                
+                # Wait for port cleanup
+                print(f"      ⏳ Waiting for port cleanup before Game 2...")
+                time.sleep(5)
+                
+                try:
+                    # Game 2: player2 as circle (first move), player1 as square
+                    # Swap the player directories
+                    print(f"      🎮 Game 2: {player2_dir.name} (Circle - first move) vs {player1_dir.name} (Square)")
+                    log_prefix = f'{board_size}_game2'
+                    print(f"      🔧 Starting game 2 with player2_temp={player2_temp.name}, player1_temp={player1_temp.name}")
+                    winner_g2, circle_score_g2, square_score_g2, error_g2 = self.run_game(
+                        match_dir, player2_temp, player1_temp, board_size, log_prefix
+                    )
+                    print(f"      ✓ Game 2 completed: winner={winner_g2}, scores={circle_score_g2}-{square_score_g2}")
+                except Exception as e:
+                    print(f"      ❌ Game 2 crashed with exception: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+                    winner_g2 = 'error'
+                    circle_score_g2 = None
+                    square_score_g2 = None
+                    error_g2 = f"Exception: {str(e)[:200]}"
+                
+                # Store results for both games
+                # Game 1: player1=circle, player2=square
+                results[f'{board_size}_game1_winner'] = winner_g1 or 'error'
+                results[f'{board_size}_game1_player1_score'] = circle_score_g1 if circle_score_g1 is not None else ''
+                results[f'{board_size}_game1_player2_score'] = square_score_g1 if square_score_g1 is not None else ''
+                results[f'{board_size}_game1_error'] = error_g1 or ''
+                
+                # Game 2: player2=circle, player1=square
+                results[f'{board_size}_game2_winner'] = winner_g2 or 'error'
+                results[f'{board_size}_game2_player1_score'] = square_score_g2 if square_score_g2 is not None else ''  # player1 was square
+                results[f'{board_size}_game2_player2_score'] = circle_score_g2 if circle_score_g2 is not None else ''  # player2 was circle
+                results[f'{board_size}_game2_error'] = error_g2 or ''
+                
+                # Aggregate results for the board size
+                # Count wins for each player across both games
+                player1_wins = 0
+                player2_wins = 0
+                
+                # Game 1: player1=circle
+                if winner_g1 == 'circle':
+                    player1_wins += 1
+                elif winner_g1 == 'square':
+                    player2_wins += 1
+                
+                # Game 2: player2=circle
+                if winner_g2 == 'circle':
+                    player2_wins += 1
+                elif winner_g2 == 'square':
+                    player1_wins += 1
+                
+                # Determine overall winner for this board
+                if player1_wins > player2_wins:
+                    overall_winner = 'player1'
+                elif player2_wins > player1_wins:
+                    overall_winner = 'player2'
+                else:
+                    overall_winner = 'draw'
+                
+                # Calculate total scores
+                total_p1_score = (circle_score_g1 if circle_score_g1 is not None else 0) + (square_score_g2 if square_score_g2 is not None else 0)
+                total_p2_score = (square_score_g1 if square_score_g1 is not None else 0) + (circle_score_g2 if circle_score_g2 is not None else 0)
+                
+                results[f'{board_size}_overall_winner'] = overall_winner
+                results[f'{board_size}_player1_total_score'] = total_p1_score
+                results[f'{board_size}_player2_total_score'] = total_p2_score
+                
+            else:
+                # Standard tournament: Play once per board size
+                log_prefix = board_size
+                winner, circle_score, square_score, error = self.run_game(
+                    match_dir, player1_temp, player2_temp, board_size, log_prefix
+                )
+                
+                results[f'{board_size}_winner'] = winner or 'error'
+                results[f'{board_size}_player1_score'] = circle_score if circle_score is not None else ''
+                results[f'{board_size}_player2_score'] = square_score if square_score is not None else ''
+                results[f'{board_size}_error'] = error or ''
             
-            results[f'{board_size}_winner'] = winner or 'error'
-            results[f'{board_size}_player1_score'] = circle_score if circle_score is not None else ''
-            results[f'{board_size}_player2_score'] = square_score if square_score is not None else ''
-            results[f'{board_size}_error'] = error or ''
-            
-            # Wait longer between games to ensure port is released
+            # Wait between board sizes to ensure port is released
             print(f"      ⏳ Waiting for port cleanup...")
             time.sleep(5)
         
@@ -680,17 +895,40 @@ class TournamentRunner:
         print(f"🎮 Board sizes: {', '.join(BOARD_SIZES)}")
         print(f"⏱️  Time limits: Small={TIME_LIMITS['small']}s, Medium={TIME_LIMITS['medium']}s, Large={TIME_LIMITS['large']}s\n")
         
-        # Initialize CSV
+        # Initialize CSV with appropriate fields based on tournament mode
         csv_fields = [
             'match_num', 'player1', 'player2', 'player1_id', 'player2_id',
         ]
-        for board_size in BOARD_SIZES:
-            csv_fields.extend([
-                f'{board_size}_winner',
-                f'{board_size}_player1_score',
-                f'{board_size}_player2_score',
-                f'{board_size}_error'
-            ])
+        
+        if TOURNAMENT_MODE == "T1":
+            # T1: Two games per board size (role swap)
+            for board_size in BOARD_SIZES:
+                csv_fields.extend([
+                    # Game 1: player1=circle, player2=square
+                    f'{board_size}_game1_winner',
+                    f'{board_size}_game1_player1_score',
+                    f'{board_size}_game1_player2_score',
+                    f'{board_size}_game1_error',
+                    # Game 2: player2=circle, player1=square
+                    f'{board_size}_game2_winner',
+                    f'{board_size}_game2_player1_score',
+                    f'{board_size}_game2_player2_score',
+                    f'{board_size}_game2_error',
+                    # Overall results for this board
+                    f'{board_size}_overall_winner',
+                    f'{board_size}_player1_total_score',
+                    f'{board_size}_player2_total_score'
+                ])
+        else:
+            # Standard: One game per board size
+            for board_size in BOARD_SIZES:
+                csv_fields.extend([
+                    f'{board_size}_winner',
+                    f'{board_size}_player1_score',
+                    f'{board_size}_player2_score',
+                    f'{board_size}_error'
+                ])
+        
         csv_fields.append('timestamp')
         
         with open(self.csv_file, 'w', newline='') as f:
@@ -745,28 +983,64 @@ class TournamentRunner:
             player1 = result['player1']
             player2 = result['player2']
             
-            for board_size in BOARD_SIZES:
-                winner = result[f'{board_size}_winner']
-                p1_score = result[f'{board_size}_player1_score']
-                p2_score = result[f'{board_size}_player2_score']
-                
-                if winner == 'circle':
-                    player_scores[player1]['wins'] += 1
-                    player_scores[player2]['losses'] += 1
-                elif winner == 'square':
-                    player_scores[player1]['losses'] += 1
-                    player_scores[player2]['wins'] += 1
-                elif winner == 'draw':
-                    player_scores[player1]['draws'] += 1
-                    player_scores[player2]['draws'] += 1
-                else:
-                    player_scores[player1]['errors'] += 1
-                    player_scores[player2]['errors'] += 1
-                
-                if p1_score:
-                    player_scores[player1]['total_score'] += float(p1_score)
-                if p2_score:
-                    player_scores[player2]['total_score'] += float(p2_score)
+            if TOURNAMENT_MODE == "T1":
+                # T1 Mode: Use overall winner and total scores
+                for board_size in BOARD_SIZES:
+                    overall_winner = result.get(f'{board_size}_overall_winner', '')
+                    p1_total = result.get(f'{board_size}_player1_total_score', '')
+                    p2_total = result.get(f'{board_size}_player2_total_score', '')
+                    
+                    if overall_winner == 'player1':
+                        player_scores[player1]['wins'] += 1
+                        player_scores[player2]['losses'] += 1
+                    elif overall_winner == 'player2':
+                        player_scores[player1]['losses'] += 1
+                        player_scores[player2]['wins'] += 1
+                    elif overall_winner == 'draw':
+                        player_scores[player1]['draws'] += 1
+                        player_scores[player2]['draws'] += 1
+                    else:
+                        # Check if there were errors in either game
+                        g1_winner = result.get(f'{board_size}_game1_winner', 'error')
+                        g2_winner = result.get(f'{board_size}_game2_winner', 'error')
+                        if g1_winner == 'error' or g2_winner == 'error':
+                            player_scores[player1]['errors'] += 1
+                            player_scores[player2]['errors'] += 1
+                    
+                    if p1_total:
+                        try:
+                            player_scores[player1]['total_score'] += float(p1_total)
+                        except:
+                            pass
+                    if p2_total:
+                        try:
+                            player_scores[player2]['total_score'] += float(p2_total)
+                        except:
+                            pass
+            else:
+                # Standard mode
+                for board_size in BOARD_SIZES:
+                    winner = result[f'{board_size}_winner']
+                    p1_score = result[f'{board_size}_player1_score']
+                    p2_score = result[f'{board_size}_player2_score']
+                    
+                    if winner == 'circle':
+                        player_scores[player1]['wins'] += 1
+                        player_scores[player2]['losses'] += 1
+                    elif winner == 'square':
+                        player_scores[player1]['losses'] += 1
+                        player_scores[player2]['wins'] += 1
+                    elif winner == 'draw':
+                        player_scores[player1]['draws'] += 1
+                        player_scores[player2]['draws'] += 1
+                    else:
+                        player_scores[player1]['errors'] += 1
+                        player_scores[player2]['errors'] += 1
+                    
+                    if p1_score:
+                        player_scores[player1]['total_score'] += float(p1_score)
+                    if p2_score:
+                        player_scores[player2]['total_score'] += float(p2_score)
         
         # Print standings
         print(f"{'Player':<30} {'Wins':<8} {'Losses':<8} {'Draws':<8} {'Errors':<8} {'Total Score':<12}")

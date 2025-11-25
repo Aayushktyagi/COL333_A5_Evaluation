@@ -254,11 +254,11 @@ class GameCoordinator:
                 if len(game["board_state_history"]) >= 3:
                     if (game["board_state_history"][-1] == game["board_state_history"][-2] == 
                         game["board_state_history"][-3]):
-                        # Repetition detected - opponent wins
-                        winner = "square" if player == "circle" else "circle"
+                        # Repetition detected - mutual stalemate results in DRAW
+                        winner = None  # Draw
                         game["winner"] = winner
                         game["game_status"] = "finished"
-                        # Calculate final scores with repetition penalty
+                        # Calculate final scores for draw (both players scored based on board position)
                         final_scores = compute_final_scores(
                             game["board"], winner, game["rows"], game["cols"], game["score_cols"],
                             remaining_times={
@@ -267,11 +267,10 @@ class GameCoordinator:
                             }
                         )
                         game["final_scores"] = final_scores
-                        logger.info(f"🔁 REPETITION DETECTED: Board repeated 3 times consecutively. {player} loses.")
-                        logger.info(f"Winner: {winner}")
+                        logger.info(f"🔁 REPETITION DETECTED: Board repeated 3 times consecutively - DRAW (mutual stalemate)")
                         logger.info(f"Final Scores - Circle: {final_scores['circle']:.2f}, Square: {final_scores['square']:.2f}")
                         self._broadcast_game_update(game)
-                        return {"success": True, "message": "Repetition detected - opponent wins", "winner": winner, "circle_score": final_scores['circle'], "square_score": final_scores['square']}
+                        return {"success": True, "message": "Repetition detected - draw", "winner": None, "circle_score": final_scores['circle'], "square_score": final_scores['square']}
             
             # Check for win condition
             winner = check_win(game["board"], game["rows"], game["cols"], game["score_cols"])
@@ -576,11 +575,19 @@ if __name__ == '__main__':
     import sys
     
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
+    board_size = sys.argv[2] if len(sys.argv) > 2 else 'small'
+    
+    # Create initial game with specified board size
+    coordinator.create_game(board_size)
     
     print(f"""
 🎮 River and Stones Web Server Starting...
 
-Web Interface: http://localhost:{port}
+Port: {port}
+Board Size: {board_size}
+Time Limit: {{'small': 120, 'medium': 240, 'large': 360}}[board_size]s per player
+
+Web Interface: http://localhost:{port} (Headless mode - API only)
 Bot Connections:
   - Circle Player: http://localhost:{port}/bot/connect/circle
   - Square Player: http://localhost:{port}/bot/connect/square
@@ -590,6 +597,10 @@ Bot API Endpoints:
   - Game State: GET /bot/game_state/<player>
   - Make Move: POST /bot/move/<player>
   - Disconnect: POST /bot/disconnect/<player>
+
+⏱️  Time Tracking:
+  - Latency compensation: Use 'thinking_time' in move submission
+  - On timeout: Opponent wins automatically with final scores computed
     """)
     
-    socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)
+    socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True, log_output=False)

@@ -14,18 +14,18 @@ from multiprocessing import Pool
 import signal
 
 # Configuration
-GROUP_STAGE_DIR = Path("/home/aayush/Aayush/Learning/Courses/COL333_TA/A5/Tournament/Group_stage")
-OUTPUT_DIR = Path("/home/aayush/Aayush/Learning/Courses/COL333_TA/A5/COL333_A5_Evaluation/tournament_results")
+GROUP_STAGE_DIR = Path("/home/aayush/Aayush/Learning/Courses/COL333_TA/A5/Tournament_1/Group_Stage")
+OUTPUT_DIR = Path("/home/aayush/Aayush/Learning/Courses/COL333_TA/A5/COL333_A5_Evaluation/Tournament_T1_Group_Stage_Results")
 EVALUATION_DIR = Path("/home/aayush/Aayush/Learning/Courses/COL333_TA/A5/COL333_A5_Evaluation")
 TOURNAMENT_SCRIPT = EVALUATION_DIR / "run_tournament.py"
 
 # Base port - each group will use BASE_PORT + group_number
 BASE_PORT = 9500
-NUM_WORKERS = 25  # Number of groups to re-run
+NUM_WORKERS = 32  # Number of groups to re-run
 
 # List of groups to re-run with improved timeout logic
-# INCOMPLETE_GROUPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 28, 29,30, 31, 32]
-INCOMPLETE_GROUPS = [31, 32]
+INCOMPLETE_GROUPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+# INCOMPLETE_GROUPS = [31, 32]
 
 def check_group_completion(group_num):
     """Check if a group's tournament is complete"""
